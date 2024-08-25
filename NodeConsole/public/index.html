@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS EC2 and RDS Instance Manager</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        #instanceList li {
+            background: #f9f9f9;
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #instanceList li > * {
+            margin-bottom: 5px;
+        }
+
+        details {
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+
+        summary {
+            cursor: pointer;
+            color: #4CAF50;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: 200px;
+        }
+
+
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        #instanceList {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        #instanceList li {
+            background: #f9f9f9;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 3px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 3px;
+        }
+
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>AWS EC2 and RDS Instance Manager</h1>
+    <button id="refreshButton">Refresh Instance List</button>
+    <ul id="instanceList"></ul>
+    <div id="message"></div>
+</div>
+
+<script>
+     const apiUrl = 'https://onha6ytkb8.execute-api.us-east-1.amazonaws.com/prod/instances';
+
+     async function fetchInstances() {
+         try {
+             const response = await fetch(apiUrl);
+            const {ec2: ec2Instances, rds: rdsInstances, asg: asgGroups} = await response.json();
+             const instanceList = document.getElementById('instanceList');
+             instanceList.innerHTML = '';
+             // EC2 Instances
+             ec2Instances.forEach(instance => {
+                const li = document.createElement('li');
+                const isRunning = instance.State === 'running';
+                const launchTime = instance.LaunchTime ? new Date(instance.LaunchTime).toLocaleString() : 'N/A';
+                const idleStatus = instance.IdleMetrics.isIdle ? 'Idle' : 'Active';
+                const networkChartId = `network-chart-${instance.InstanceId}`;
+                const cpuChartId = `cpu-chart-${instance.InstanceId}`;
+                const networkInData = instance.IdleMetrics.networkInDatapoints
+                    .map(dp => `${new Date(dp.Timestamp).toLocaleString()}: ${dp.Sum.toFixed(2)} bytes`)
+                    .join('<br>');
+                const cpuUtilizationData = instance.IdleMetrics.cpuUtilizationDatapoints
+                    .map(dp => `${new Date(dp.Timestamp).toLocaleString()}: ${dp.Average.toFixed(2)}%`)
+                    .join('<br>');
+                li.innerHTML = `
+                              <strong>EC2 Instance</strong><br>
+                               ID: ${instance.InstanceId}<br>
+                               Type: ${instance.InstanceType}<br>
+                              State: ${instance.State}<br>
+                              Name: ${instance.Name || 'N/A'}<br>
+                             Public IP: ${instance.PublicIpAddress || 'N/A'}<br>
+                              Launch Time: ${launchTime}<br>
+                               Idle Status: ${idleStatus}<br>
+                               <details>
+                                  <summary>Network In Data Plot</summary>
+                                 <div class="chart-container"><canvas id="${networkChartId}"></canvas></div>
+                               </details>
+                              <details>
+                                 <summary>CPU Utilization Plot</summary>
+                                 <div class="chart-container"><canvas id="${cpuChartId}"></canvas></div>
+                              </details>
+                                <input type="password" id="password-${instance.InstanceId}" placeholder="Enter password">
+                               <button onclick="changeInstanceState('${instance.InstanceId}', '${isRunning ? 'stop' : 'start'}', false)">${isRunning ? 'Stop' : 'Start'} Instance</button>
+                            `;
+                instanceList.appendChild(li);
+                // Create chart for this instance
+                createNetworkChart(networkChartId, instance.IdleMetrics.networkInDatapoints);
+                createCPUChart(cpuChartId, instance.IdleMetrics.cpuUtilizationDatapoints);
+             });
+     // RDS Instances
+     rdsInstances.forEach(instance => {
+        const li = document.createElement('li');
+        const isRunning = instance.DBInstanceStatus === 'available';
+        li.innerHTML = `
+            <strong>RDS Instance</strong><br>
+            ID: ${instance.DBInstanceIdentifier}<br>
+            Class: ${instance.DBInstanceClass}<br>
+            Status: ${instance.DBInstanceStatus}<br>
+             Engine: ${instance.Engine}<br>
+             Endpoint: ${instance.Endpoint?.Address || 'N/A'}<br>
+             Port: ${instance.Endpoint?.Port || 'N/A'}<br>
+            <br>
+             <input type="password" id="password-${instance.DBInstanceIdentifier}" placeholder="Enter password">
+             <button onclick="changeInstanceState('${instance.DBInstanceIdentifier}', '${isRunning ? 'stop' : 'start'}', true, false, ${instance.IsCluster})">${isRunning ? 'Stop' : 'Start'} Instance</button>
+         `;
+        instanceList.appendChild(li);
+     });
+            // Auto Scaling Groups
+            asgGroups.forEach(group => {
+                const li = document.createElement('li');
+                const isRunning = group.DesiredCapacity > 0;
+                li.innerHTML = `
+                    <strong>Auto Scaling Group</strong><br>
+                    Name: ${group.AutoScalingGroupName}<br>
+                    Desired Capacity: ${group.DesiredCapacity}<br>
+                    Min Size: ${group.MinSize}<br>
+                    Max Size: ${group.MaxSize}<br>
+                    Status: ${group.Status || 'N/A'}<br>
+                    <br>
+                    <input type="password" id="password-${group.AutoScalingGroupName}" placeholder="Enter password">
+                    <button onclick="changeInstanceState('${group.AutoScalingGroupName}', '${isRunning ? 'stop' : 'start'}', false, true)">${isRunning ? 'Stop' : 'Start'} ASG</button>
+                `;
+                instanceList.appendChild(li);
+            });
+         } catch (error) {
+             showMessage('Error fetching instances: ' + error.message, 'error');
+         }
+     }
+
+
+// Updated to handle EC2, RDS instances, and ASGs
+    async function changeInstanceState(instanceId, action, isRDS, isASG = false, isCluster = false) {
+         try {
+             const passwordInput = document.getElementById(`password-${instanceId}`);
+             const password = passwordInput.value;
+            if (!password) {
+                throw new Error('Password is required');
+            }
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                 headers: {
+                     'Content-Type': 'application/json',
+                 },
+                body: JSON.stringify({instanceId, password, action, isRDS, isASG, isCluster}),
+             });
+             const result = await response.json();
+             if (!response.ok) {
+                 throw new Error(result.error || `Failed to ${action} instance`);
+             }
+             showMessage(result.message, 'success');
+             fetchInstances();
+         } catch (error) {
+            showMessage(`Error ${action}ing ${isASG ? 'ASG' : (isRDS ? 'RDS' : 'EC2')} instance: ` + error.message, 'error');
+         }
+     }
+
+    function showMessage(message, type) {
+        const messageDiv = document.getElementById('message');
+        messageDiv.textContent = message;
+        messageDiv.className = type;
+    }
+
+    // These functions remain unchanged as they are only for EC2 instances
+    function createNetworkChart(chartId, datapoints) {
+        const ctx = document.getElementById(chartId).getContext('2d');
+        const labels = datapoints.map(dp => new Date(dp.Timestamp).toLocaleString());
+        const data = datapoints.map(dp => dp.Sum);
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Network In (bytes)',
+                    data: data,
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    function createCPUChart(chartId, datapoints) {
+        const ctx = document.getElementById(chartId).getContext('2d');
+        const labels = datapoints.map(dp => new Date(dp.Timestamp).toLocaleString());
+        const data = datapoints.map(dp => dp.Average);
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'CPU Utilization (%)',
+                    data: data,
+                    borderColor: 'rgb(255, 99, 132)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+    }
+
+
+    document.getElementById('refreshButton').addEventListener('click', fetchInstances);
+
+    // Initial fetch
+    fetchInstances();
+</script>
+</body>
+</html>

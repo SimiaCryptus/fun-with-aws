@@ -1,0 +1,14 @@
+.sys
+.skyenet
+.idea/
+html-games.iml
+node_modules/
+ build/
+ .env
+*.log
+*.tmp
+/checkers/dist/
+/3dmaze/node_modules/
+/chess3d/coverage/
+coverage
+dist

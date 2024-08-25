@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat Room</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        #roomInfo {
+            background-color: #fff;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #chat {
+            border: none;
+            border-radius: 5px;
+            padding: 10px;
+            height: 400px;
+            overflow-y: scroll;
+            margin-bottom: 20px;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #chat div {
+            margin-bottom: 10px;
+            padding: 5px 10px;
+            border-radius: 5px;
+            background-color: #e6e6e6;
+        }
+
+        #chat div[title^="You:"] {
+            background-color: #d4edda;
+            text-align: right;
+        }
+
+        #messageForm {
+            display: flex;
+            gap: 10px;
+        }
+        #message {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        #send {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #send:hover {
+            background-color: #0056b3;
+        }
+
+
+        #shareLink {
+            word-break: break-all;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+<h1>WebSocket Chat Room</h1>
+<div id="roomInfo">
+    <p>Room Topic: <span id="roomTopic"></span></p>
+    <p>Share this link: <span id="shareLink"></span></p>
+</div>
+<div id="chat"></div>
+<form id="messageForm">
+    <input type="text" id="message" placeholder="Type a message...">
+    <button type="submit" id="send">Send</button>
+</form>
+
+<script>
+    const chatDiv = document.getElementById('chat');
+    const messageInput = document.getElementById('message');
+    const messageForm = document.getElementById('messageForm');
+    const roomTopicSpan = document.getElementById('roomTopic');
+    const shareLinkSpan = document.getElementById('shareLink');
+
+    // Replace with your WebSocket API endpoint
+    const wsEndpoint = 'wss://bndslpwzjk.execute-api.us-east-1.amazonaws.com/dev';
+    let socket;
+    let roomTopic;
+
+    function generateRoomTopic() {
+        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    }
+
+    function getOrCreateRoomTopic() {
+        const urlParams = new URLSearchParams(window.location.hash.slice(1));
+        let topic = urlParams.get('topic');
+        if (!topic) {
+            topic = generateRoomTopic();
+            window.location.hash = `topic=${topic}`;
+        }
+        return topic;
+    }
+
+    roomTopic = getOrCreateRoomTopic();
+    roomTopicSpan.textContent = roomTopic;
+    shareLinkSpan.textContent = window.location.href;
+
+    function connectWebSocket() {
+        socket = new WebSocket(wsEndpoint);
+        socket.addEventListener('open', (event) => {
+            console.log('Connected to WebSocket');
+            appendMessage('System: Connected to WebSocket');
+            // Subscribe to the room topic
+            const subscribeMessage = JSON.stringify({action: 'subscribe', topic: roomTopic});
+            socket.send(subscribeMessage);
+            console.log('Sent subscribe message:', subscribeMessage);
+            appendMessage(`System: Subscribed to topic "${roomTopic}"`);
+        });
+        socket.addEventListener('message', (event) => {
+            try {
+                const parsedData = JSON.parse(event.data);
+                console.log('Message from server:', parsedData);
+                if (parsedData.action === 'message') {
+                    const isOwnMessage = parsedData.sender === socket.id;
+                    const sender = isOwnMessage ? 'You' : `User (${parsedData.sender})`;
+                    appendMessage(`${sender}: ${parsedData.message}`);
+                } else if (parsedData.action === 'subscribed') {
+                    appendMessage(`System: Successfully subscribed to topic "${parsedData.topic}"`);
+                    console.log(`Subscribed to topic: ${parsedData.topic}`);
+                } else {
+                    appendMessage('Server: ' + JSON.stringify(parsedData, null, 2));
+                }
+            } catch (error) {
+                console.error('Error parsing server message:', error);
+                appendMessage('System: Error parsing server message: ' + error.message);
+                appendMessage('Raw server message: ' + event.data);
+            }
+        });
+        socket.addEventListener('close', (event) => {
+            console.log('Disconnected from WebSocket', event);
+            appendMessage('System: Disconnected from WebSocket. Attempting to reconnect...');
+            setTimeout(connectWebSocket, 3000);  // Attempt to reconnect after 3 seconds
+        });
+        socket.addEventListener('error', (error) => {
+            console.error('WebSocket error:', error, error.message);
+            appendMessage('System: WebSocket error: ' + error.message);
+        });
+    }
+
+    connectWebSocket();
+
+    // Function to append messages to the chat
+    function appendMessage(message) {
+        const messageElement = document.createElement('div');
+        messageElement.textContent = message;
+        messageElement.title = message.startsWith('You:') ? 'You: ' + new Date().toLocaleString() : new Date().toLocaleString();
+        chatDiv.appendChild(messageElement);
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+
+    // Send message to WebSocket server
+    messageForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const message = messageInput.value;
+        if (message) {
+            const publishMessage = JSON.stringify({action: 'publish', topic: roomTopic, message: message});
+            socket.send(publishMessage);
+            console.log('Sent publish message:', publishMessage);
+            appendMessage('You: ' + message);
+            messageInput.value = '';
+        }
+    });
+
+</script>
+</body>
+</html>
